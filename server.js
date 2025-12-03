@@ -61,6 +61,7 @@ const appSchema = new mongoose.Schema({
     users: { type: String, default: '0' },
     order: { type: Number, default: 0 },
     isTrending: { type: Boolean, default: false },
+    isDisabled: { type: Boolean, default: false },
     createdAt: { type: Date, default: Date.now }
 });
 
@@ -101,7 +102,11 @@ app.post('/api/auth', (req, res) => {
 // Get all apps
 app.get('/api/apps', async (req, res) => {
     try {
-        const apps = await App.find().sort({ order: 1 });
+        const filter = {};
+        if (req.query.includeDisabled !== 'true') {
+            filter.isDisabled = { $ne: true };
+        }
+        const apps = await App.find(filter).sort({ order: 1 });
         res.json(apps);
     } catch (error) {
         res.status(500).json({ error: error.message });
@@ -111,7 +116,7 @@ app.get('/api/apps', async (req, res) => {
 // Get trending apps
 app.get('/api/apps/trending', async (req, res) => {
     try {
-        const apps = await App.find({ isTrending: true }).sort({ order: 1 });
+        const apps = await App.find({ isTrending: true, isDisabled: { $ne: true } }).sort({ order: 1 });
         res.json(apps);
     } catch (error) {
         res.status(500).json({ error: error.message });
@@ -173,21 +178,21 @@ app.post('/api/apps/:id/ratings', async (req, res) => {
     try {
         const { ratings } = req.body;
         const app = await App.findById(req.params.id);
-        
+
         if (!app) {
             return res.status(404).json({ error: 'App not found' });
         }
 
         app.ratingBreakdown = ratings;
-        
+
         // Calculate total ratings and average
         const total = Object.values(ratings).reduce((sum, count) => sum + count, 0);
         const weightedSum = (ratings.five * 5) + (ratings.four * 4) + (ratings.three * 3) + (ratings.two * 2) + (ratings.one * 1);
         const average = total > 0 ? (weightedSum / total).toFixed(1) : 0;
-        
+
         app.totalRatings = total;
         app.rating = parseFloat(average);
-        
+
         await app.save();
         res.json(app);
     } catch (error) {
@@ -199,14 +204,14 @@ app.post('/api/apps/:id/ratings', async (req, res) => {
 app.get('/api/apps/:id/reviews', async (req, res) => {
     try {
         const userId = req.headers['x-user-id'];
-        
-        const approvedReviews = await Review.find({ 
-            appId: req.params.id, 
-            approved: true 
+
+        const approvedReviews = await Review.find({
+            appId: req.params.id,
+            approved: true
         }).sort({ createdAt: -1 });
-        
+
         let userPendingReviews = [];
-        
+
         if (userId) {
             userPendingReviews = await Review.find({
                 appId: req.params.id,
@@ -214,10 +219,10 @@ app.get('/api/apps/:id/reviews', async (req, res) => {
                 userId: userId
             }).sort({ createdAt: -1 });
         }
-        
+
         const allReviews = [...userPendingReviews, ...approvedReviews];
         allReviews.sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt));
-        
+
         res.json(allReviews);
     } catch (error) {
         res.status(500).json({ error: error.message });
@@ -228,14 +233,14 @@ app.get('/api/apps/:id/reviews', async (req, res) => {
 app.post('/api/apps/:id/reviews', async (req, res) => {
     try {
         const userId = crypto.randomBytes(16).toString('hex');
-        
+
         const review = new Review({
             appId: req.params.id,
             userId: userId,
             ...req.body
         });
         await review.save();
-        
+
         res.status(201).json({ ...review.toObject(), userId });
     } catch (error) {
         res.status(500).json({ error: error.message });
@@ -256,8 +261,8 @@ app.get('/api/reviews', async (req, res) => {
 app.put('/api/reviews/:id', async (req, res) => {
     try {
         const review = await Review.findByIdAndUpdate(
-            req.params.id, 
-            { approved: req.body.approved }, 
+            req.params.id,
+            { approved: req.body.approved },
             { new: true }
         );
         if (!review) {
@@ -287,10 +292,15 @@ app.get('/api/apps/search/:query', async (req, res) => {
     try {
         const query = req.params.query;
         const apps = await App.find({
-            $or: [
-                { name: { $regex: query, $options: 'i' } },
-                { category: { $regex: query, $options: 'i' } },
-                { shortDescription: { $regex: query, $options: 'i' } }
+            $and: [
+                { isDisabled: { $ne: true } },
+                {
+                    $or: [
+                        { name: { $regex: query, $options: 'i' } },
+                        { category: { $regex: query, $options: 'i' } },
+                        { shortDescription: { $regex: query, $options: 'i' } }
+                    ]
+                }
             ]
         }).sort({ order: 1 });
         res.json(apps);
